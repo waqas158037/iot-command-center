@@ -1,0 +1,90 @@
+# Local stack for IoT Command Center.
+#
+#   docker compose up -d db                 # PostgreSQL only (for `npm run dev`)
+#   docker compose --profile app up --build # full stack: db, migrations + seed, web, worker, MQTT broker
+#
+# Secrets are read from your shell or .env file; compose refuses to start the app without them.
+name: iot-command-center
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: iot
+      POSTGRES_PASSWORD: iot
+      POSTGRES_DB: iot_command_center
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iot -d iot_command_center"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    profiles: ["app"]
+    build: .
+    image: iot-command-center:local
+    command: ["sh", "-c", "npx prisma migrate deploy && npx prisma db seed"]
+    environment: &app-env
+      DATABASE_URL: postgresql://iot:iot@db:5432/iot_command_center?schema=public
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET (openssl rand -base64 32)}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
+      ENABLE_SIMULATOR: ${ENABLE_SIMULATOR:-true}
+      ALLOW_SIMULATOR_IN_PRODUCTION: ${ALLOW_SIMULATOR_IN_PRODUCTION:-false}
+      MQTT_BROKER_URL: mqtt://mqtt:1883
+      MQTT_USERNAME: ${MQTT_USERNAME:-icc-worker}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD for the worker service account}
+      MQTT_HOOK_SECRET: ${MQTT_HOOK_SECRET:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    profiles: ["app"]
+    build: .
+    image: iot-command-center:local
+    environment: *app-env
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  mqtt:
+    profiles: ["app"]
+    build: .
+    image: iot-command-center:local
+    command: ["npx", "tsx", "worker/mqtt-broker.ts"]
+    environment: *app-env
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    profiles: ["app"]
+    build: .
+    image: iot-command-center:local
+    command: ["npx", "tsx", "worker/index.ts"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mqtt:
+        condition: service_started
+
+volumes:
+  pgdata:
