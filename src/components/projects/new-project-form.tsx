@@ -48,7 +48,7 @@ type Values = z.infer<typeof schema>;
 export function NewProjectForm({ types, initialType }: { types: TypeOption[]; initialType?: string }) {
   const router = useRouter();
   const [serverError, setServerError] = React.useState<string | null>(null);
-  const { register, handleSubmit, watch, setValue, setError, formState: { errors, isSubmitting } } = useForm<Values>({
+  const { register, handleSubmit, watch, getValues, setValue, setError, formState: { errors, isSubmitting } } = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: { name: "", projectCode: "", description: "", projectTypeKey: initialType ?? "", status: "PLANNING", startedAt: "", endedAt: "", applyTemplateRules: true },
   });
@@ -110,7 +110,7 @@ export function NewProjectForm({ types, initialType }: { types: TypeOption[]; in
           <CardHeader><CardTitle>2. Details</CardTitle></CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <Field id="name" label="Project name" required error={errors.name?.message} className="sm:col-span-2">
-              <Input {...register("name", { onBlur: (e) => { if (!watch("projectCode") && e.target.value) setValue("projectCode", e.target.value.split(/\s+/).map((w: string) => w[0]).join("").toUpperCase().slice(0, 6) + "-" + new Date().getFullYear()); } })} />
+              <Input {...register("name", { onBlur: (e) => { if (!getValues("projectCode") && e.target.value) setValue("projectCode", e.target.value.split(/\s+/).map((w: string) => w[0]).join("").toUpperCase().slice(0, 6) + "-" + new Date().getFullYear()); } })} />
             </Field>
             <Field id="projectCode" label="Project code" required error={errors.projectCode?.message} help="Unique. Stored in upper case.">
               <Input {...register("projectCode")} className="font-mono uppercase" />

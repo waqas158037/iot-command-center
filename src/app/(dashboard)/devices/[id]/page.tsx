@@ -113,7 +113,7 @@ export default async function DevicePage({ params, searchParams }: PageProps<"/d
           <CardHeader className="pb-2"><CardTitle className="text-base">Credentials</CardTitle><CardDescription>Secrets are stored hashed. Only the prefix is shown.</CardDescription></CardHeader>
           <CardContent>
             <CredentialPanel deviceId={id} deviceIdentifier={device.deviceIdentifier} protocol={device.protocol} canManage={device.access.canManageCredentials} disabled={disabled} timeZone={tz} appUrl={e.APP_URL} topicPrefix={e.MQTT_TOPIC_PREFIX}
-              credentials={device.credentials.map((c) => ({ id: c.id, secretPrefix: c.secretPrefix, credentialVersion: c.credentialVersion, expiresAt: c.expiresAt?.toISOString() ?? null, revokedAt: c.revokedAt?.toISOString() ?? null, lastUsed: c.lastUsedAt ? formatRelative(c.lastUsedAt) : "never", state: c.revokedAt ? "Revoked" : c.expiresAt && c.expiresAt.getTime() < Date.now() ? "Expired" : c.expiresAt ? "Expiring" : "Active", createdAt: c.createdAt.toISOString() }))} />
+              credentials={device.credentials.map((c) => ({ id: c.id, secretPrefix: c.secretPrefix, credentialVersion: c.credentialVersion, expiresAt: c.expiresAt?.toISOString() ?? null, revokedAt: c.revokedAt?.toISOString() ?? null, lastUsed: c.lastUsedAt ? formatRelative(c.lastUsedAt) : "never", state: credentialState(c), createdAt: c.createdAt.toISOString() }))} />
           </CardContent>
         </Card>
         <Card>
@@ -161,10 +161,16 @@ export default async function DevicePage({ params, searchParams }: PageProps<"/d
   );
 }
 
+function credentialState(c: { revokedAt: Date | null; expiresAt: Date | null }) {
+  if (c.revokedAt) return "Revoked" as const;
+  if (c.expiresAt) return c.expiresAt.getTime() < Date.now() ? ("Expired" as const) : ("Expiring" as const);
+  return "Active" as const;
+}
+
 function qualityText(meta: unknown) {
   if (!meta || typeof meta !== "object") return "OK";
   const m = meta as Record<string, unknown>;
-  const flags = Object.entries(m).filter(([, v]) => v === true).map(([k]) => titleCase(k.replace(/([A-Z])/g, " $1")));
-  if (m.convertedFrom) flags.push(`Converted from ${m.convertedFrom}`);
+  const flags = Object.entries(m).filter(([k, v]) => v === true && k !== "converted").map(([k]) => titleCase(k.replace(/([A-Z])/g, "_$1")));
+  if (m.converted) flags.push(`Converted from ${m.originalValue} ${m.originalUnit}`);
   return flags.length ? flags.join(", ") : "OK";
 }

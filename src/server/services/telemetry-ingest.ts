@@ -42,7 +42,9 @@ export async function authenticateDevice(deviceIdentifier: string, secret: strin
   if (device.status === "DISABLED") throw unauthenticated("Device is disabled");
   // Throttle lastUsedAt writes to at most once a minute per credential.
   await prisma.deviceCredential.updateMany({ where: { id: match.id, OR: [{ lastUsedAt: null }, { lastUsedAt: { lt: new Date(now.getTime() - 60_000) } }] }, data: { lastUsedAt: now } });
-  const { credentials: _c, ...rest } = device;
+  // Credential hashes never leave this function.
+  const { credentials, ...rest } = device;
+  void credentials;
   return rest;
 }
 

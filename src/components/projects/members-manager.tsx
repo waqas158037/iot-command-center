@@ -42,14 +42,14 @@ export function MembersManager({ projectId, members, candidates, canManage, owne
         >
           <label className="grid flex-1 gap-1 text-sm">
             <span className="font-medium">Add a user</span>
-            <NativeSelect value={userId} onChange={(e) => { setUserId(e.target.value); const c = available.find((x) => x.id === e.target.value); if (c && !CAP[c.role].includes(role)) setRole(CAP[c.role][0]); }}>
+            <NativeSelect id="member-user" value={userId} onChange={(e) => { setUserId(e.target.value); const c = available.find((x) => x.id === e.target.value); if (c && !CAP[c.role].includes(role)) setRole(CAP[c.role][0]); }}>
               <option value="">Select a user…</option>
               {available.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.email}) · {ROLE_LABELS[c.role]}</option>)}
             </NativeSelect>
           </label>
           <label className="grid gap-1 text-sm sm:w-44">
             <span className="font-medium">Project role</span>
-            <NativeSelect value={role} onChange={(e) => setRole(e.target.value as ProjectRole)}>
+            <NativeSelect id="member-role" value={role} onChange={(e) => setRole(e.target.value as ProjectRole)}>
               {allowed.map((r) => <option key={r} value={r}>{PROJECT_ROLE_LABELS[r]}</option>)}
             </NativeSelect>
           </label>

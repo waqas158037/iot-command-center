@@ -180,6 +180,7 @@ export const PROJECT_TYPES: ProjectTypeTemplate[] = [
     isSensitive: true,
     analyticsLabel: "Rule-based",
     analyticsNote: "Posture classification uses a tilt-angle threshold (configurable). It is not a machine-learning model.",
+    safetyNotice: "Academic demonstration only. Posture readings are not a medical or physiotherapy assessment.",
     deviceRequirements: ["ESP32 with MPU-6050 or MPU-9250 IMU", "Vibration motor for haptic feedback (optional)"],
     sensors: [
       { key: "acceleration", name: "Acceleration magnitude", measurement: "acceleration", simulation: { mode: "wave", base: 9.81, amplitude: 0.3, noise: 0.15, periodMinutes: 30, abnormal: 14 } },

@@ -20,12 +20,6 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
     ? await Promise.all([listProjects(user, { search: q, pageSize: 8, includeArchived: true }), listDevices(user, { search: q, pageSize: 8 }), listSensors(user, { search: q, pageSize: 8 }), listAlerts(user, { search: q, pageSize: 8 })])
     : [empty, empty, empty, empty];
   const total = projects.total + devices.total + sensors.total + alerts.total;
-  const Section = ({ title, icon: Icon, count, href, children }: { title: string; icon: typeof Cpu; count: number; href: string; children: React.ReactNode }) => (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between pb-2"><CardTitle className="flex items-center gap-2 text-base"><Icon className="size-4" /> {title} <span className="text-sm font-normal text-muted-foreground">({count})</span></CardTitle>{count > 8 && <Link href={href} className="text-sm text-primary hover:underline">View all</Link>}</CardHeader>
-      <CardContent>{count === 0 ? <p className="text-sm text-muted-foreground">No matches.</p> : <ul className="divide-y text-sm">{children}</ul>}</CardContent>
-    </Card>
-  );
   return (
     <>
       <PageHeader title="Search" description={q.length >= 2 ? `${total} result${total === 1 ? "" : "s"} for “${q}” in projects you can access.` : "Type at least two characters."} />
@@ -47,5 +41,14 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
         </div>
       )}
     </>
+  );
+}
+
+function Section({ title, icon: Icon, count, href, children }: { title: string; icon: typeof Cpu; count: number; href: string; children: React.ReactNode }) {
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between pb-2"><CardTitle className="flex items-center gap-2 text-base"><Icon className="size-4" /> {title} <span className="text-sm font-normal text-muted-foreground">({count})</span></CardTitle>{count > 8 && <Link href={href} className="text-sm text-primary hover:underline">View all</Link>}</CardHeader>
+      <CardContent>{count === 0 ? <p className="text-sm text-muted-foreground">No matches.</p> : <ul className="divide-y text-sm">{children}</ul>}</CardContent>
+    </Card>
   );
 }

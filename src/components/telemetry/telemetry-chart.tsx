@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Area, Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Table2, LineChart as LineIcon } from "lucide-react";
 import { formatMeasurementValue, getMeasurement } from "@/lib/telemetry/measurements";
@@ -42,7 +42,7 @@ export function TelemetryChart({ series, height = 240, kind = "line", timeZone =
   const isState = def?.kind === "STATE";
   const single = plotted.length === 1;
 
-  const { rows, span } = useMemo(() => {
+  const { rows, span } = (() => {
     const map = new Map<number, Record<string, number | null>>();
     plotted.forEach((s, i) => {
       for (const p of s.points) {
@@ -56,7 +56,7 @@ export function TelemetryChart({ series, height = 240, kind = "line", timeZone =
     const rows = [...map.values()].sort((a, b) => (a.t as number) - (b.t as number));
     const span = rows.length > 1 ? (rows[rows.length - 1].t as number) - (rows[0].t as number) : 0;
     return { rows, span };
-  }, [plotted, single]);
+  })();
 
   const hasData = rows.some((r) => plotted.some((_, i) => r[`s${i}`] !== null && r[`s${i}`] !== undefined));
   const values = rows.flatMap((r) => plotted.map((_, i) => r[`s${i}`])).filter((v): v is number => typeof v === "number");
