@@ -1,0 +1,569 @@
+// IoT Command Center — PostgreSQL schema.
+// All timestamps are stored as timestamptz in UTC.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────── Enums ───────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  PROJECT_MANAGER
+  ENGINEER
+  VIEWER
+}
+
+enum ProjectRole {
+  MANAGER
+  ENGINEER
+  VIEWER
+}
+
+enum ProjectCategory {
+  SMART_HOME_ENERGY
+  WASTE_MANAGEMENT
+  AGRICULTURE
+  ENVIRONMENT_WEATHER
+  HEALTHCARE_WEARABLES
+  LIVESTOCK
+  SECURITY_ACCESS
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum DeviceProtocol {
+  MQTT
+  HTTP
+  SIMULATED
+}
+
+enum DeviceStatus {
+  ONLINE
+  OFFLINE
+  DEGRADED
+  UNKNOWN
+  DISABLED
+}
+
+enum SensorOrigin {
+  MEASURED // read by a physical (or simulated physical) sensor
+  CALCULATED // derived on-device or server-side from other values
+  EXTERNAL // sourced from a third-party provider (e.g. weather API)
+}
+
+enum TelemetrySource {
+  MQTT
+  HTTP
+  SIMULATED
+}
+
+enum AlertConditionType {
+  THRESHOLD_ABOVE
+  THRESHOLD_BELOW
+  OUTSIDE_RANGE
+  INSIDE_RANGE
+  STATE_EQUALS
+  DEVICE_OFFLINE
+  MISSING_READINGS
+  BATTERY_LOW
+}
+
+enum AlertSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum AlertEventType {
+  TRIGGERED
+  RETRIGGERED
+  ACKNOWLEDGED
+  RESOLVED
+  AUTO_RESOLVED
+  NOTE
+}
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+enum SimulationStatus {
+  RUNNING
+  PAUSED
+  STOPPED
+}
+
+enum DeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// ─────────────────────────────── Identity ───────────────────────────────
+
+model User {
+  id                      String    @id @default(uuid()) @db.Uuid
+  name                    String
+  email                   String    @unique // stored lower-cased and trimmed
+  passwordHash            String?
+  role                    UserRole  @default(VIEWER)
+  isActive                Boolean   @default(true)
+  timezone                String    @default("UTC")
+  // Validated by src/lib/validation/notification-preferences.ts
+  notificationPreferences Json      @default("{}")
+  // Incremented to invalidate every outstanding session (deactivation, role or password change).
+  sessionVersion          Int       @default(1)
+  lastLoginAt             DateTime? @db.Timestamptz(3)
+  createdAt               DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime  @updatedAt @db.Timestamptz(3)
+
+  ownedProjects       Project[]            @relation("ProjectOwner")
+  memberships         ProjectMember[]
+  createdRules        AlertRule[]          @relation("RuleCreator")
+  acknowledgedAlerts  Alert[]              @relation("AlertAcknowledgedBy")
+  resolvedAlerts      Alert[]              @relation("AlertResolvedBy")
+  alertEvents         AlertEvent[]
+  notifications       Notification[]
+  auditLogs           AuditLog[]
+  simulationSessions  SimulationSession[]
+  passwordResetTokens PasswordResetToken[]
+  invitationsSent     UserInvitation[]     @relation("InvitedBy")
+
+  @@index([role])
+  @@index([isActive])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique // SHA-256 of the emailed token; the token itself is never stored
+  expiresAt DateTime  @db.Timestamptz(3)
+  usedAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model UserInvitation {
+  id          String    @id @default(uuid()) @db.Uuid
+  email       String
+  role        UserRole
+  tokenHash   String    @unique
+  invitedById String    @db.Uuid
+  expiresAt   DateTime  @db.Timestamptz(3)
+  acceptedAt  DateTime? @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  invitedBy User @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@index([email])
+}
+
+// Fixed-window counters used for login, ingestion and API rate limits.
+model RateLimitBucket {
+  key         String   @id
+  windowStart DateTime @db.Timestamptz(3)
+  count       Int
+  expiresAt   DateTime @db.Timestamptz(3)
+
+  @@index([expiresAt])
+}
+
+model AppSetting {
+  key         String   @id
+  value       Json
+  updatedById String?  @db.Uuid
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+}
+
+// ─────────────────────────────── Projects ───────────────────────────────
+
+model ProjectType {
+  id                   String          @id @default(uuid()) @db.Uuid
+  key                  String          @unique
+  name                 String
+  category             ProjectCategory
+  description          String
+  // Snapshot of the registry template (sensors, widgets, rules, reports). See src/lib/project-types.
+  defaultConfiguration Json
+  // Health / biometric projects get stricter access and privacy notices.
+  isSensitive          Boolean         @default(false)
+  isActive             Boolean         @default(true)
+  createdAt            DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime        @updatedAt @db.Timestamptz(3)
+
+  projects Project[]
+
+  @@index([category])
+}
+
+model Project {
+  id            String        @id @default(uuid()) @db.Uuid
+  name          String
+  projectCode   String        @unique // globally unique, upper-case
+  description   String        @default("")
+  projectTypeId String        @db.Uuid
+  status        ProjectStatus @default(PLANNING)
+  ownerId       String        @db.Uuid
+  // Per-project copy of the type template; editing it never changes other projects.
+  configuration Json          @default("{}")
+  startedAt     DateTime?     @db.Timestamptz(3)
+  endedAt       DateTime?     @db.Timestamptz(3)
+  archivedAt    DateTime?     @db.Timestamptz(3)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime      @updatedAt @db.Timestamptz(3)
+
+  projectType   ProjectType         @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
+  owner         User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members       ProjectMember[]
+  devices       Device[]
+  readings      TelemetryReading[]
+  alertRules    AlertRule[]
+  alerts        Alert[]
+  simulations   SimulationSession[]
+  notifications Notification[]
+
+  @@index([status])
+  @@index([projectTypeId])
+  @@index([ownerId])
+  @@index([createdAt])
+}
+
+model ProjectMember {
+  id          String      @id @default(uuid()) @db.Uuid
+  projectId   String      @db.Uuid
+  userId      String      @db.Uuid
+  projectRole ProjectRole @default(VIEWER)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(3)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+// ─────────────────────────────── Devices ───────────────────────────────
+
+model Device {
+  id                  String         @id @default(uuid()) @db.Uuid
+  name                String
+  // Globally unique; also the MQTT topic segment and broker username.
+  deviceIdentifier    String         @unique
+  projectId           String         @db.Uuid
+  hardwareModel       String         @default("")
+  firmwareVersion     String         @default("")
+  protocol            DeviceProtocol
+  status              DeviceStatus   @default(UNKNOWN)
+  locationDescription String         @default("")
+  latitude            Decimal?       @db.Decimal(9, 6)
+  longitude           Decimal?       @db.Decimal(9, 6)
+  lastSeenAt          DateTime?      @db.Timestamptz(3)
+  // Seconds without a heartbeat before the device is OFFLINE; null uses the platform default.
+  heartbeatTimeoutSec Int?
+  configuration       Json           @default("{}")
+  createdAt           DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime       @updatedAt @db.Timestamptz(3)
+  deactivatedAt       DateTime?      @db.Timestamptz(3)
+
+  project      Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  credentials  DeviceCredential[]
+  sensors      Sensor[]
+  readings     TelemetryReading[]
+  statusEvents DeviceStatusEvent[]
+  alertRules   AlertRule[]
+  alerts       Alert[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([lastSeenAt])
+}
+
+model DeviceCredential {
+  id                String    @id @default(uuid()) @db.Uuid
+  deviceId          String    @db.Uuid
+  // SHA-256 of a 256-bit random secret. The secret is shown once at creation and never stored.
+  credentialHash    String    @unique
+  // First characters of the secret, safe to display for identification.
+  secretPrefix      String
+  credentialVersion Int
+  expiresAt         DateTime? @db.Timestamptz(3)
+  revokedAt         DateTime? @db.Timestamptz(3)
+  lastUsedAt        DateTime? @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, credentialVersion])
+}
+
+model DeviceStatusEvent {
+  id             String        @id @default(uuid()) @db.Uuid
+  deviceId       String        @db.Uuid
+  previousStatus DeviceStatus?
+  newStatus      DeviceStatus
+  reason         String
+  occurredAt     DateTime      @default(now()) @db.Timestamptz(3)
+
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, occurredAt])
+}
+
+// ─────────────────────────────── Sensors & telemetry ───────────────────────────────
+
+model Sensor {
+  id            String       @id @default(uuid()) @db.Uuid
+  deviceId      String       @db.Uuid
+  sensorKey     String // unique per device, used in payloads
+  name          String
+  sensorType    String // measurement key from src/lib/telemetry/measurements.ts
+  unit          String // canonical unit symbol for this sensor
+  origin        SensorOrigin @default(MEASURED)
+  description   String       @default("")
+  configuration Json         @default("{}") // e.g. state labels for STATE sensors
+  minValue      Decimal?     @db.Decimal(18, 6)
+  maxValue      Decimal?     @db.Decimal(18, 6)
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime     @updatedAt @db.Timestamptz(3)
+
+  device     Device             @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  readings   TelemetryReading[]
+  alertRules AlertRule[]
+  alerts     Alert[]
+
+  @@unique([deviceId, sensorKey])
+  @@index([sensorType])
+}
+
+// High-volume table: bigint identity key, narrow rows, composite indexes for time-range queries.
+// Upgrade path for large deployments: native range partitioning on occurredAt + hourly rollups.
+model TelemetryReading {
+  id              BigInt          @id @default(autoincrement())
+  projectId       String          @db.Uuid
+  deviceId        String          @db.Uuid
+  sensorId        String          @db.Uuid
+  value           Decimal         @db.Decimal(18, 6)
+  unit            String
+  occurredAt      DateTime        @db.Timestamptz(3)
+  receivedAt      DateTime        @default(now()) @db.Timestamptz(3)
+  source          TelemetrySource
+  messageId       String?
+  qualityMetadata Json?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  device  Device  @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  sensor  Sensor  @relation(fields: [sensorId], references: [id], onDelete: Restrict)
+
+  // Idempotency: a device message can deliver each sensor's value at most once.
+  @@unique([deviceId, sensorId, messageId])
+  @@index([sensorId, occurredAt(sort: Desc)])
+  @@index([deviceId, occurredAt(sort: Desc)])
+  @@index([projectId, occurredAt(sort: Desc)])
+  @@index([receivedAt])
+}
+
+// ─────────────────────────────── Alerts ───────────────────────────────
+
+model AlertRule {
+  id                     String             @id @default(uuid()) @db.Uuid
+  projectId              String             @db.Uuid
+  deviceId               String?            @db.Uuid
+  sensorId               String?            @db.Uuid
+  // Applies to every sensor of this measurement type in scope when sensorId is null.
+  sensorType             String?
+  name                   String
+  description            String             @default("")
+  conditionType          AlertConditionType
+  thresholdConfiguration Json
+  severity               AlertSeverity
+  consecutiveCount       Int                @default(1)
+  cooldownSeconds        Int                @default(300)
+  autoResolve            Boolean            @default(false)
+  isEnabled              Boolean            @default(true)
+  createdById            String?            @db.Uuid
+  createdAt              DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime           @updatedAt @db.Timestamptz(3)
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  device    Device? @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  sensor    Sensor? @relation(fields: [sensorId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation("RuleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  alerts    Alert[]
+
+  @@index([projectId, isEnabled])
+  @@index([deviceId])
+  @@index([sensorId])
+}
+
+model Alert {
+  id                String        @id @default(uuid()) @db.Uuid
+  projectId         String        @db.Uuid
+  deviceId          String?       @db.Uuid
+  sensorId          String?       @db.Uuid
+  alertRuleId       String?       @db.Uuid
+  title             String
+  description       String
+  severity          AlertSeverity
+  status            AlertStatus   @default(ACTIVE)
+  triggeringValue   Decimal?      @db.Decimal(18, 6)
+  lastValue         Decimal?      @db.Decimal(18, 6)
+  thresholdSnapshot Json
+  occurrenceCount   Int           @default(1)
+  lastTriggeredAt   DateTime      @default(now()) @db.Timestamptz(3)
+  // "<ruleId>:<deviceId>:<sensorId>" while the alert is open, null once resolved.
+  // The unique index guarantees at most one open alert per rule target (deduplication).
+  openKey           String?       @unique
+  isSimulated       Boolean       @default(false)
+  createdAt         DateTime      @default(now()) @db.Timestamptz(3)
+  acknowledgedAt    DateTime?     @db.Timestamptz(3)
+  resolvedAt        DateTime?     @db.Timestamptz(3)
+  acknowledgedById  String?       @db.Uuid
+  resolvedById      String?       @db.Uuid
+
+  project        Project        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  device         Device?        @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  sensor         Sensor?        @relation(fields: [sensorId], references: [id], onDelete: SetNull)
+  rule           AlertRule?     @relation(fields: [alertRuleId], references: [id], onDelete: SetNull)
+  acknowledgedBy User?          @relation("AlertAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  resolvedBy     User?          @relation("AlertResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  events         AlertEvent[]
+  notifications  Notification[]
+
+  @@index([projectId, status, createdAt(sort: Desc)])
+  @@index([status, severity])
+  @@index([alertRuleId, deviceId, sensorId, resolvedAt])
+  @@index([deviceId])
+}
+
+model AlertEvent {
+  id        String         @id @default(uuid()) @db.Uuid
+  alertId   String         @db.Uuid
+  eventType AlertEventType
+  actorId   String?        @db.Uuid
+  notes     String?
+  metadata  Json?
+  createdAt DateTime       @default(now()) @db.Timestamptz(3)
+
+  alert Alert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([alertId, createdAt])
+}
+
+// ─────────────────────────────── Notifications ───────────────────────────────
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  projectId String?   @db.Uuid
+  alertId   String?   @db.Uuid
+  kind      String // ALERT_NEW | ALERT_CRITICAL | DEVICE_OFFLINE | ALERT_ACKNOWLEDGED | ALERT_RESOLVED
+  title     String
+  message   String
+  // Prevents the same event notifying the same user twice.
+  dedupeKey String
+  readAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  user       User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project    Project?               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  alert      Alert?                 @relation(fields: [alertId], references: [id], onDelete: SetNull)
+  deliveries NotificationDelivery[]
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, readAt, createdAt(sort: Desc)])
+}
+
+model NotificationDelivery {
+  id             String         @id @default(uuid()) @db.Uuid
+  notificationId String         @db.Uuid
+  channel        String // EMAIL
+  status         DeliveryStatus @default(PENDING)
+  attempts       Int            @default(0)
+  lastError      String?
+  nextAttemptAt  DateTime       @default(now()) @db.Timestamptz(3)
+  sentAt         DateTime?      @db.Timestamptz(3)
+  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+}
+
+// ─────────────────────────────── Audit & operations ───────────────────────────────
+
+model AuditLog {
+  id           String       @id @default(uuid()) @db.Uuid
+  actorId      String?      @db.Uuid
+  action       String // e.g. project.create, device.credential.rotate, auth.login
+  resourceType String
+  resourceId   String?
+  outcome      AuditOutcome
+  metadata     Json?
+  requestId    String?
+  ipAddress    String?
+  createdAt    DateTime     @default(now()) @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([actorId])
+  @@index([resourceType, resourceId])
+  @@index([action])
+}
+
+model SimulationSession {
+  id            String           @id @default(uuid()) @db.Uuid
+  projectId     String           @db.Uuid
+  status        SimulationStatus @default(RUNNING)
+  // { intervalSeconds, scenario, deviceIds, disconnectDeviceIds }
+  configuration Json
+  startedById   String?          @db.Uuid
+  startedAt     DateTime         @default(now()) @db.Timestamptz(3)
+  stoppedAt     DateTime?        @db.Timestamptz(3)
+  lastTickAt    DateTime?        @db.Timestamptz(3)
+  tickCount     Int              @default(0)
+  readingsCount Int              @default(0)
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  startedBy User?   @relation(fields: [startedById], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([projectId])
+}
+
+// Database lease so only one worker instance runs each background job at a time.
+model WorkerLease {
+  name      String   @id
+  holderId  String
+  expiresAt DateTime @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
