@@ -153,6 +153,9 @@ export async function updateProject(actor: Actor, projectId: string, input: Upda
   const data = updateProjectSchema.parse(input);
   await assertProjectAction(actor, projectId, "project.update");
   const current = await prisma.project.findUniqueOrThrow({ where: { id: projectId }, include: { projectType: true } });
+  if (current.archivedAt && (data.status === undefined || data.status === "ARCHIVED")) {
+    throw forbidden("Archived projects are read-only. Change the status to restore the project first.");
+  }
 
   const update: Prisma.ProjectUpdateInput = {};
   if (data.name !== undefined) update.name = data.name;

@@ -1,0 +1,6 @@
+import { apiRoute } from "@/lib/http/handler";
+import { uuid } from "@/lib/validation/schemas";
+import { setSimulationStatus } from "@/server/services/simulation";
+
+/** Resumes a paused session. */
+export const POST = apiRoute<{ id: string }>(async ({ params, user, requestId, ip }) => setSimulationStatus(user, uuid.parse(params.id), "RUNNING", { requestId, ip }));

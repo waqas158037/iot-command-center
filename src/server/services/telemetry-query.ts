@@ -10,7 +10,8 @@ export const BUCKETS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "6h": 2160
 export type BucketKey = keyof typeof BUCKETS;
 
 /**
- * Chooses an aggregation interval so a chart never needs more than ~300 points.
+ * Chooses an aggregation interval so a chart needs at most ~150 points (coarse enough that
+ * devices reporting every few minutes fill consecutive buckets instead of alternating with gaps).
  * Ranges up to 3 hours are returned raw (bounded by `limit`).
  */
 export function chooseBucket(from: Date, to: Date, requested: string): BucketKey | "raw" {
@@ -18,7 +19,7 @@ export function chooseBucket(from: Date, to: Date, requested: string): BucketKey
   const seconds = (to.getTime() - from.getTime()) / 1000;
   if (seconds <= 3 * 3600) return "raw";
   for (const key of ["1m", "5m", "15m", "1h", "6h", "1d"] as BucketKey[]) {
-    if (seconds / BUCKETS[key] <= 300) return key;
+    if (seconds / BUCKETS[key] <= 150) return key;
   }
   return "1d";
 }
@@ -145,7 +146,7 @@ export async function latestReadingsForSensors(sensorIds: string[]): Promise<Map
 
 export async function deviceLatest(actor: Actor, deviceId: string) {
   await assertDeviceAction(actor, deviceId, "telemetry.view");
-  const sensors = await prisma.sensor.findMany({ where: { deviceId }, select: { id: true, sensorKey: true, name: true, sensorType: true, unit: true, origin: true, isActive: true, configuration: true } });
+  const sensors = await prisma.sensor.findMany({ where: { deviceId }, select: { id: true, sensorKey: true, name: true, sensorType: true, unit: true, origin: true, isActive: true, configuration: true, minValue: true, maxValue: true } });
   const latest = await latestReadingsForSensors(sensors.map((s) => s.id));
   return sensors.map((s) => ({ ...s, latest: latest.get(s.id) ?? null }));
 }

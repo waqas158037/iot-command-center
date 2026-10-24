@@ -14,6 +14,8 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
     <div>
       <h1 className="text-2xl font-semibold">Sign in</h1>
       <p className="mt-1 text-sm text-muted-foreground">Use your IoT Command Center account.</p>
+      {sp.reset && <p role="status" className="mt-4 rounded-md border border-success/30 bg-success/8 p-3 text-sm">Your password was changed. Sign in with the new password.</p>}
+      {sp.registered && <p role="status" className="mt-4 rounded-md border border-success/30 bg-success/8 p-3 text-sm">Account created. You can sign in now.</p>}
       <LoginForm callbackUrl={callbackUrl} />
       <div className="mt-6 flex justify-between text-sm">
         <Link href="/forgot-password" className="text-primary hover:underline">Forgot password?</Link>

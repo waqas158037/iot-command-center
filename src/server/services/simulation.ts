@@ -231,7 +231,7 @@ export async function generateHistory(projectId: string, opts: { hours: number; 
     }
     if (batch.length) total += (await prisma.telemetryReading.createMany({ data: batch, skipDuplicates: true })).count;
     await prisma.device.update({ where: { id: device.id }, data: { lastSeenAt: end, status: "ONLINE" } });
-    if (device.status !== "ONLINE") await prisma.deviceStatusEvent.create({ data: { deviceId: device.id, previousStatus: device.status, newStatus: "ONLINE", reason: "Historical simulation data generated", occurredAt: end } });
+    if (device.status !== "ONLINE") await prisma.deviceStatusEvent.create({ data: { deviceId: device.id, previousStatus: device.status, newStatus: "ONLINE", reason: "Historical simulation data generated", occurredAt: new Date() } });
   }
   return { devices: deviceRows.length, readings: total };
 }
